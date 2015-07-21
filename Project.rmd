@@ -1,0 +1,217 @@
+---
+title: "HAR Project for Practical Machine Learning Class"
+author: "Igor Volfman"
+date: "Friday, July 17, 2015"
+output: html_document
+---
+
+# Executive summary 
+
+The project aims to predict correct human body position during dumbbell excersize.
+For group of sensors are positioned on on arm, forearm, elbow and on a dumbbell.
+Each group collects 38 data streams of time during excersizes.
+
+The training data will be used to traing classifiers using different models.  
+The model with highest accuracy will be selected by predicting cross validation set.
+Then the winnging model will be applied to predict outcome of 20 test cases.
+
+The project will divided into followinf parts:
+1. Loading training data
+2. Data cleaing and exploration
+        a. Removing irrelevant features.
+        b. Cleaning data based on number of complete cases
+        c. Inspection variations
+3. Dividing training data into training and cross-validation sets with 80/20 ratio.
+4. Run different models on the training sets
+        a. GBM, LDA, CART, Random forest and SVM
+        b. Predict outcome on  CV set
+        c. Aggeregate prediction models using random forest
+5. Load test data set
+6. Predict outcome
+
+
+Loading libraries and setting appropriate folders
+```{r}
+library(knitr)
+library(ggplot2)
+library(stats)
+library(plyr)
+library(reshape2)
+library(caret)
+library(e1071)
+library(randomForest)
+
+setwd( file.path("~", "Coursera Data Science Track", 
+                  "Class8-PracitcalMachineLearning", "Project" ) )
+```
+
+# 1.Download training and test data sets.
+```{r}
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+#               "pml-training.csv")
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+#               "pml-testing.csv")
+```
+
+Loading files and removing empty strings and "#DIV/0!"
+```{r}
+pml.testing <- read.csv( "pml-testing.csv", na.strings=c("",".","#DIV/0!", "NA") )
+pml.training <- read.csv( "pml-training.csv", na.strings=c("",".","#DIV/0!", "NA") )
+```
+
+# 2. Cleaning and exploring data.
+Outcome classes are evenly distributed
+````{r}
+count(pml.training, 'classe')
+````
+
+There are 38 measurements in each group of sensors attached to  person's belt, arm forearmp
+and dumbbell.
+```{r}
+groups <- c("belt", "arm", "dumbbell", "forearm")
+col.group <- list()
+
+cnames <- colnames(pml.training)
+
+for (i in 1:length( groups )) {
+        col.group[[i]] <- grep( paste("_",  groups[i], "_{0,1}", sep =""), cnames)
+
+        writeLines( paste( "Sensor group: ", groups[i] ) ) 
+        print ("---------------------")
+        print ( cnames[ col.group[[i]] ] )
+        print ("---------------------")
+}
+
+# NUmber of variables in each sensor group
+unlist( lapply( col.group, length) ) 
+```
+
+All other vaiables are irrelevant to the predcition model.They are removed from training set.
+```{r}
+valid.columns = list()
+valid.columns[[1]] <- c( unlist(col.group), which(cnames == "classe") )
+str( pml.training[-valid.columns[[1]]] )
+pml.training <- pml.training[, valid.columns[[1]]]
+```
+
+Most of variables carry very little information as one can see from the histogram. In fact
+all but 53 of them have more than 19,000 missing values. These variabes are discarded as well.
+
+```{r}
+sum( complete.cases( pml.training ) )
+
+na.count <- sapply(pml.training, function(x) sum(length(which(is.na(x)))))
+hist( na.count, breaks = 200, main = "Number of NAs in each column" )
+sum( na.count < 15000 )
+
+valid.columns[[2]] <- which( na.count < 15000 )
+sum( complete.cases( pml.training[, na.count < 15000 ] ) )
+pml.training <- pml.training [, na.count < 15000 ]
+```
+
+# 3. Dividing training set into training and cross-validation groups.
+One would be used for training different models and another (cross- validation set) would be used to select highest accuracy model.
+
+```{r}
+trainIndex <- createDataPartition(pml.training$classe, p = 0.80,list=FALSE)
+training <- pml.training[trainIndex,]
+cv <- pml.training[-trainIndex,]
+```
+
+# Random forest  model.
+```{r}
+# Seed is set anew before run of each model
+# Training run-time is monitored
+
+set.seed(54321)
+rf.time <- system.time(
+        mod.rf <- randomForest( training[,1:52], training$classe, ntree = 200)
+        )
+prediction.rf <- predict(mod.rf, newdata = cv)
+accuracy.rf <- confusionMatrix( prediction.rf, cv$classe)$overall[1]
+print(accuracy.rf)
+print( rf.time[[1]])
+```
+
+# Support vector machine
+```{r}
+set.seed(54321)
+svm.time <- system.time(
+        mod.svm <- svm( classe ~ ., data = training)
+        )
+prediction.svm <- predict(mod.svm, newdata = cv)
+accuracy.svm <- confusionMatrix( prediction.svm, cv$classe)$overall[1]
+print(accuracy.svm)
+print( svm.time[[1]])
+```
+
+# LDA model
+```{r}
+set.seed(5431)
+lda.time <- system.time(
+        mod.lda <- train( classe ~., data = training, method = "lda")
+        )
+prediction.lda <- predict(mod.lda, newdata = cv)
+accuracy.lda <- confusionMatrix( prediction.lda, cv$classe)$overall[1]
+print(accuracy.lda)
+print( lda.time[[1]])
+```
+
+# 5. Selecting best model
+Comparing accuracy and run times of all three models, the random forest is most accurate and has comparable run time. 
+```{r}
+models <- data.frame( lda = c( accuracy.lda, lda.time[1] ), 
+                        rf = c( accuracy.rf, rf.time[1] ),
+                        svm = c( accuracy.svm, svm.time[1]) )
+rownames(models) <- c("Accuracy", "Run-time")
+```
+
+Out of sample error rate of random forest model is below 0.3%
+```{r}
+error.rate <- 1 - accuracy.rf
+print(error.rate)
+```
+
+Confusion matrix
+```{r}
+confusionMatrix( prediction.rf, cv$classe)
+```
+
+Ranking 25 most important vaiables of random forest model based on Gini index
+```{r, echo=FALSE}
+varImpPlot(mod.rf, n.var = 25, main = "Omportance of variables")
+```
+
+It is interesting to see how fast random forest model converges
+```{r, echo=FALSE}
+plot(mod.rf, main = "Out of bag error rate")
+lgn <-  c("MSE",unlist( lapply( as.character(unique(training$classe)),
+                       function(x) { paste0("Classe ", x)} )))
+legend("topright", cex =0.5, legend = lgn)
+```
+
+# 6. Predicting outcome of 20 test cases
+```{r}
+# Reading test data set and removing columns not used for training
+pml.testing <- read.csv( "pml-testing.csv", na.strings=c("",".","#DIV/0!", "NA") )
+testing <- pml.testing [, valid.columns[[1]] ] 
+testing <- testing[, valid.columns[[2]] ]
+
+colnames(testing)[53] <- "classe"
+testing$classe <- factor( testing$classe )
+answers = predict( mod.rf, newdata = testing)
+print( answers )
+```
+
+Writing data files for prject submission
+```{r, echo=FALSE}
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+                }
+        }
+pml_write_files(answers)
+```
+
